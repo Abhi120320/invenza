@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:14-alpine
@@ -24,12 +22,11 @@ services:
     container_name: invenza-backend
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/app
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/invenza
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://db:5432/invenza
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=password
       - SECRET_KEY=change-this-to-a-random-secret-key-in-production
-      - ALGORITHM=HS256
       - APP_ENV=development
       - FRONTEND_URL=http://localhost:5174
       - SMTP_HOST=smtp.gmail.com
@@ -38,6 +35,9 @@ services:
       - SMTP_PASSWORD=msel aeah taoo vdtx
       - EMAILS_FROM_EMAIL=invenzaxodo@gmail.com
       - EMAILS_FROM_NAME=Invenza
+      - RAZORPAY_KEY_ID=rzp_test_TvmS8r4oOuHudO
+      - RAZORPAY_KEY_SECRET=EprfME2muemJ0YxXGGWUh3gq
+
     depends_on:
       db:
         condition: service_healthy

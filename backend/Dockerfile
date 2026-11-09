@@ -1,29 +1,19 @@
-FROM python:3.11-slim
+# Multi-stage build for Invenza Java Spring Boot Backend (Supports both linux/arm64 and linux/amd64)
+FROM maven:3.9-eclipse-temurin-17 AS builder
 
-# Set working directory
+WORKDIR /build
+COPY pom.xml .
+COPY src ./src
+RUN mvn clean package -DskipTests
+
+# Runtime stage
+FROM eclipse-temurin:17-jre-jammy
+
 WORKDIR /app
+COPY --from=builder /build/target/*.jar app.jar
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy project files
-COPY . .
-
-# Expose port
 EXPOSE 8000
 
-# Run migrations and start the application
-# We use a shell script or inline command to run alembic before starting
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+ENV JAVA_OPTS="-Xms256m -Xmx512m"
+
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

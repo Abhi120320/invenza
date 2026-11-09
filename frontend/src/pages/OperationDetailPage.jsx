@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { operationApi, productApi, warehouseApi, stockApi } from '../api/client';
+import { operationApi, productApi, warehouseApi, stockApi, paymentApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import { Plus, Trash2, Printer, CheckCircle, XCircle, ArrowLeft, AlertTriangle, Home, Package } from 'lucide-react';
+import { Plus, Trash2, Printer, CheckCircle, XCircle, ArrowLeft, AlertTriangle, Home, Package, CreditCard, ShieldCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { ReceiptPrinter } from '../components/ReceiptPrinter';
+import InvoicePrinterModal from '../components/InvoicePrinterModal';
 
 const TYPE_CONFIG = {
   IN: {
@@ -56,7 +56,8 @@ export default function OperationDetailPage() {
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
-  const [printStage, setPrintStage] = useState('processing');
+  const [payment, setPayment] = useState(null);
+  const [isPaying, setIsPaying] = useState(false);
 
   const [form, setForm] = useState({
     type: initialType,
@@ -100,22 +101,36 @@ export default function OperationDetailPage() {
     if (isNew) return;
     setLoading(true);
     try {
-      const res = await operationApi.get(id);
-      const op = res.data;
-      setOperation(op);
-      setCfg(TYPE_CONFIG[op.type]);
-      setForm({
-        type: op.type,
-        warehouse_id: op.warehouse_id || '',
-        from_location_id: op.from_location_id || '',
-        to_location_id: op.to_location_id || '',
-        contact: op.contact || '',
-        schedule_date: op.schedule_date || '',
-        notes: op.notes || '',
-        lines: op.lines?.length > 0 
-          ? op.lines.map(l => ({ product_id: l.product_id, quantity: l.quantity }))
-          : [{ product_id: '', quantity: 1 }]
-      });
+      const [opRes, payRes] = await Promise.allSettled([
+        operationApi.get(id),
+        paymentApi.getPaymentByOperation(id)
+      ]);
+
+      if (opRes.status === 'fulfilled') {
+        const op = opRes.value.data;
+        setOperation(op);
+        setCfg(TYPE_CONFIG[op.type]);
+        setForm({
+          type: op.type,
+          warehouse_id: op.warehouse_id || '',
+          from_location_id: op.from_location_id || '',
+          to_location_id: op.to_location_id || '',
+          contact: op.contact || '',
+          schedule_date: op.schedule_date || '',
+          notes: op.notes || '',
+          lines: op.lines?.length > 0 
+            ? op.lines.map(l => ({ product_id: l.product_id, quantity: l.quantity }))
+            : [{ product_id: '', quantity: 1 }]
+        });
+      } else {
+        throw new Error('Failed to load operation');
+      }
+
+      if (payRes.status === 'fulfilled' && payRes.value?.data && payRes.value.data.status === 'SUCCESS') {
+        setPayment(payRes.value.data);
+      } else {
+        setPayment(null);
+      }
     } catch {
       toast.error('Failed to load operation');
       navigate(-1);
@@ -199,16 +214,108 @@ export default function OperationDetailPage() {
     }
   };
 
+  const calculateAmount = () => {
+    const totalQty = form.lines.reduce((acc, l) => acc + (Number(l.quantity) || 0), 0);
+    return Math.max(totalQty * 100, 100);
+  };
+
   const handlePrint = () => {
     setIsPrinting(true);
-    setPrintStage('processing');
-    
-    setTimeout(() => {
-      setPrintStage('printing');
-      setTimeout(() => {
-        setPrintStage('complete');
-      }, 4000);
-    }, 1500);
+  };
+
+  const handleInitiatePayment = async () => {
+    if (!operation) return;
+    setIsPaying(true);
+    const totalAmount = calculateAmount();
+
+    try {
+      const orderRes = await paymentApi.createOrder({
+        operation_id: operation.id,
+        amount: totalAmount,
+        currency: 'INR'
+      });
+      const orderData = orderRes.data;
+
+      const triggerVerification = async (paymentId, orderId, signature) => {
+        const verifyToastId = toast.loading('Verifying Razorpay payment with backend...');
+        try {
+          const verifyRes = await paymentApi.verifyPayment({
+            operation_id: operation.id,
+            razorpay_order_id: orderId,
+            razorpay_payment_id: paymentId,
+            razorpay_signature: signature,
+          });
+          toast.success('Payment verified! Generating invoice...', { id: verifyToastId });
+          setPayment(verifyRes.data);
+          handlePrint();
+        } catch (err) {
+          toast.error(err.response?.data?.detail || 'Signature verification failed', { id: verifyToastId });
+        } finally {
+          setIsPaying(false);
+        }
+      };
+
+      if (typeof window !== 'undefined' && window.Razorpay) {
+        const options = {
+          key: orderData.key_id || 'rzp_test_TvmS8r4oOuHudO',
+          amount: orderData.amount_paise,
+          currency: orderData.currency || 'INR',
+          name: 'Invenza Logistics',
+          description: `Invoice Payment for ${operation.reference || 'Operation'}`,
+          order_id: orderData.order_id,
+          handler: function (response) {
+            triggerVerification(
+              response.razorpay_payment_id,
+              response.razorpay_order_id,
+              response.razorpay_signature
+            );
+          },
+          prefill: {
+            name: user?.full_name || 'Invenza Customer',
+            email: user?.email || 'customer@invenza.com',
+            contact: '9999999999',
+          },
+          notes: {
+            operation_id: operation.id,
+            reference: operation.reference,
+          },
+          theme: {
+            color: '#0f766e',
+          },
+          modal: {
+            ondismiss: function () {
+              setIsPaying(false);
+              toast('Payment canceled or dismissed', { icon: 'ℹ️' });
+            }
+          }
+        };
+
+        const rzp = new window.Razorpay(options);
+        rzp.on('payment.failed', function (resp) {
+          toast.error(resp.error?.description || 'Payment failed');
+          setIsPaying(false);
+        });
+        rzp.open();
+      } else {
+        // Fallback simulation when Razorpay checkout.js script isn't loaded (e.g. offline sandbox)
+        toast('Razorpay checkout loaded in test simulation', { icon: '💳' });
+        const mockPayId = 'pay_test_' + Math.random().toString(36).substring(2, 12);
+        const mockSig = 'test_sig_' + Math.random().toString(36).substring(2, 12);
+        await triggerVerification(mockPayId, orderData.order_id, mockSig);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to initialize Razorpay checkout');
+      setIsPaying(false);
+    }
+  };
+
+  const handlePrintClick = () => {
+    if (!payment || payment.status !== 'SUCCESS') {
+      toast('Payment required via Razorpay before generating the invoice receipt', { icon: '💳' });
+      handleInitiatePayment();
+      return;
+    }
+    handlePrint();
   };
 
   if (loading) {
@@ -237,7 +344,7 @@ export default function OperationDetailPage() {
           </div>
         </div>
         
-        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
           {!isReadonly && (
             <button className="btn btn-secondary" onClick={handleSave} disabled={saving}>
               {saving ? 'Saving...' : 'Save'}
@@ -253,13 +360,44 @@ export default function OperationDetailPage() {
               <XCircle size={16} /> Cancel
             </button>
           )}
+
+          {operation && operation.status === 'done' && (!payment || payment.status !== 'SUCCESS') && (
+            <button 
+              className="btn btn-primary" 
+              onClick={handleInitiatePayment}
+              disabled={isPaying}
+              style={{ background: '#0f766e', borderColor: '#0f766e', color: 'white', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+            >
+              <CreditCard size={16} /> {isPaying ? 'Opening Gateway...' : `Pay ₹${calculateAmount()} & Generate Invoice`}
+            </button>
+          )}
+
+          {payment && payment.status === 'SUCCESS' && (
+            <span 
+              className="badge badge-done" 
+              style={{ 
+                display: 'inline-flex', 
+                alignItems: 'center', 
+                gap: '6px', 
+                padding: '6px 12px', 
+                fontSize: '0.825rem', 
+                background: 'rgba(15, 118, 110, 0.12)', 
+                color: '#0f766e', 
+                border: '1px solid rgba(15, 118, 110, 0.35)',
+                fontWeight: 600
+              }}
+            >
+              <CheckCircle size={14} color="#0f766e" /> PAID ₹{Number(payment.amount).toFixed(2)}
+            </span>
+          )}
+
           <button 
             className="btn btn-secondary" 
-            onClick={handlePrint} 
+            onClick={handlePrintClick} 
             disabled={currentStatus !== 'done'}
-            title={currentStatus !== 'done' ? "Can only print when Done" : "Print receipt"}
+            title={currentStatus !== 'done' ? "Can only print when Done" : (payment?.status === 'SUCCESS' ? "Print receipt" : "Pay to generate and print invoice")}
           >
-            <Printer size={16} /> Print
+            <Printer size={16} /> {payment?.status === 'SUCCESS' ? 'Print Receipt' : 'Generate Invoice'}
           </button>
         </div>
       </div>
@@ -500,141 +638,15 @@ export default function OperationDetailPage() {
         </form>
       </div>
 
-      {isPrinting && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
-          backgroundColor: 'rgba(0,0,0,0.5)',
-          zIndex: 9999,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}>
-          <div style={{ position: 'relative', width: '100%', maxWidth: '28rem', display: 'flex', justifyContent: 'center' }}>
-            <ReceiptPrinter.Root stage={printStage} animate={true}>
-              <ReceiptPrinter.Machine>
-                <ReceiptPrinter.Header>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '32px', height: '32px', borderRadius: '4px', background: 'var(--bg-elevated)', color: 'var(--text-primary)', border: '1px solid var(--border-default)' }}>
-                    <Package size={18} />
-                  </div>
-                  <button 
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    style={{ borderRadius: '9999px' }}
-                    onClick={() => setIsPrinting(false)}
-                  >
-                    <Home size={14} />
-                    Home
-                  </button>
-                </ReceiptPrinter.Header>
-                <ReceiptPrinter.Screen>
-                  <div className="mb-4 flex items-start justify-between">
-                    <div>
-                      <div className="font-semibold">{cfg.label} Order</div>
-                      <div className="text-sm opacity-70 text-grayscale-9 dark:text-grayscale-10">{form.type} - {operation?.reference || 'DRAFT'}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm opacity-70 text-grayscale-9 dark:text-grayscale-10">Total items</div>
-                      <div className="font-semibold text-lg">{form.lines.reduce((acc, l) => acc + (Number(l.quantity) || 0), 0)}</div>
-                    </div>
-                  </div>
-                  <ReceiptPrinter.Status />
-                </ReceiptPrinter.Screen>
-                <ReceiptPrinter.Output>
-                  <ReceiptPrinter.Paper>
-                    <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1.5rem', marginTop: '1rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '48px', height: '48px', background: 'var(--text-primary)', color: 'var(--bg-base)', borderRadius: '4px' }}>
-                        <Package size={28} />
-                      </div>
-                    </div>
-                    
-                    <hr className="my-6 border-t border-dashed border-grayscale-12/30 dark:border-grayscale-1/30" />
-                    
-                    <div className="flex justify-between items-start mb-2">
-                      <div className="font-bold tracking-widest uppercase">{cfg.label}</div>
-                      <div className="font-bold">{form.lines.reduce((acc, l) => acc + (Number(l.quantity) || 0), 0)}</div>
-                    </div>
-                    <div className="text-sm opacity-70">{operation?.reference || 'DRAFT'}</div>
-                    
-                    <hr className="my-6 border-t border-dashed border-grayscale-12/30 dark:border-grayscale-1/30" />
-                    
-                    <table className="w-full text-sm mb-6">
-                      <tbody>
-                        {form.lines.map((l, i) => {
-                          const p = products.find(prod => prod.id === l.product_id);
-                          return (
-                            <tr key={i}>
-                              <td className="py-1">{p ? p.name : 'Unknown'}</td>
-                              <td className="py-1 text-right">{l.quantity}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-
-                    <div className="flex justify-between items-center mb-6 font-bold text-lg">
-                      <div className="tracking-widest uppercase">TOTAL ITEMS</div>
-                      <div>{form.lines.reduce((acc, l) => acc + (Number(l.quantity) || 0), 0)}</div>
-                    </div>
-
-                    <hr className="my-6 border-t border-dashed border-grayscale-12/30 dark:border-grayscale-1/30" />
-
-                    <table className="w-full text-xs opacity-80 mb-10">
-                      <tbody>
-                        <tr>
-                          <td className="py-1">Order</td>
-                          <td className="py-1 text-right">{operation?.reference || 'DRAFT'}</td>
-                        </tr>
-                        <tr>
-                          <td className="py-1">Created by</td>
-                          <td className="py-1 text-right">{user?.login_id || 'System'}</td>
-                        </tr>
-                        <tr>
-                          <td className="py-1">Date</td>
-                          <td className="py-1 text-right">
-                            {operation?.created_at ? new Date(operation.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).toUpperCase() : new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).toUpperCase()}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-
-                    <div className="flex flex-col items-center pb-8">
-                      <svg width="180" height="40" viewBox="0 0 180 40">
-                        <rect x="0" y="0" width="4" height="40" fill="currentColor" />
-                        <rect x="6" y="0" width="2" height="40" fill="currentColor" />
-                        <rect x="12" y="0" width="6" height="40" fill="currentColor" />
-                        <rect x="22" y="0" width="4" height="40" fill="currentColor" />
-                        <rect x="30" y="0" width="2" height="40" fill="currentColor" />
-                        <rect x="34" y="0" width="8" height="40" fill="currentColor" />
-                        <rect x="46" y="0" width="4" height="40" fill="currentColor" />
-                        <rect x="54" y="0" width="2" height="40" fill="currentColor" />
-                        <rect x="60" y="0" width="6" height="40" fill="currentColor" />
-                        <rect x="70" y="0" width="2" height="40" fill="currentColor" />
-                        <rect x="76" y="0" width="8" height="40" fill="currentColor" />
-                        <rect x="88" y="0" width="4" height="40" fill="currentColor" />
-                        <rect x="94" y="0" width="2" height="40" fill="currentColor" />
-                        <rect x="100" y="0" width="6" height="40" fill="currentColor" />
-                        <rect x="110" y="0" width="4" height="40" fill="currentColor" />
-                        <rect x="118" y="0" width="2" height="40" fill="currentColor" />
-                        <rect x="122" y="0" width="8" height="40" fill="currentColor" />
-                        <rect x="134" y="0" width="4" height="40" fill="currentColor" />
-                        <rect x="142" y="0" width="2" height="40" fill="currentColor" />
-                        <rect x="148" y="0" width="6" height="40" fill="currentColor" />
-                        <rect x="158" y="0" width="2" height="40" fill="currentColor" />
-                        <rect x="164" y="0" width="8" height="40" fill="currentColor" />
-                        <rect x="176" y="0" width="4" height="40" fill="currentColor" />
-                      </svg>
-                      <div className="mt-2 text-[10px] tracking-widest opacity-60">
-                        {operation?.reference || 'DRAFT-0000'}
-                      </div>
-                    </div>
-                  </ReceiptPrinter.Paper>
-                </ReceiptPrinter.Output>
-              </ReceiptPrinter.Machine>
-            </ReceiptPrinter.Root>
-          </div>
-        </div>
-      )}
+      <InvoicePrinterModal
+        isOpen={isPrinting}
+        onClose={() => setIsPrinting(false)}
+        operation={operation}
+        payment={payment}
+        products={products}
+        user={user}
+        cfg={cfg}
+      />
     </div>
   );
 }

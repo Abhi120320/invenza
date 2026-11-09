@@ -6,7 +6,11 @@
 /* ── Google Fonts loaded via index.html ────────────────────── */
 @import "tailwindcss";
 
-@theme {
+@layer base {
+
+/* ── Design Tokens ─────────────────────────────────────────── */
+:root {
+  /* Grayscale tokens */
   --color-grayscale-1: #fcfcfc;
   --color-grayscale-2: #f9f9f9;
   --color-grayscale-3: #f0f0f0;
@@ -20,11 +24,7 @@
   --color-grayscale-11: #646464;
   --color-grayscale-12: #202020;
   --color-green-9: #30a46c;
-}
-@layer base {
 
-/* ── Design Tokens ─────────────────────────────────────────── */
-:root {
   /* Brand colors */
   --brand-primary: #168778;       /* Teal */
   --brand-primary-dark: #0e6357;
@@ -1158,3 +1158,24 @@ tbody td:first-child { color: var(--text-primary); font-weight: 500; }
   border-radius: 16px;
 }
 }
+
+/* ── Invoice Document Print Media Styles ───────────────────── */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  .no-print, nav, aside, header, .sidebar, .topnav {
+    display: none !important;
+  }
+  .printable-invoice {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    display: block !important;
+  }
+}
+

@@ -1,82 +1,99 @@
-# Invenza — Inventory Management System
+# Invenza — Modular Inventory Management System
 
-A full-stack, real-time inventory management system built with React + FastAPI.
+A full-stack, enterprise-grade inventory management system built with **React** on the frontend and **Java (Spring Boot 3)** on the backend.
 
 ---
 
-## Stack
+## Tech Stack
 
-| Layer | Tech |
+| Layer | Technology |
 |---|---|
-| Frontend | React (Vite), Vanilla CSS |
-| Backend | Python 3.9+, FastAPI (async) |
-| ORM | SQLAlchemy 2.0 async + Alembic |
-| Database | PostgreSQL (asyncpg driver) |
-| Auth | JWT access + refresh tokens, bcrypt |
-| Real-time | FastAPI native WebSockets |
-| Validation | Pydantic v2 |
+| **Frontend** | React 18 (Vite), TailwindCSS, Framer Motion, Axios, Lucide Icons |
+| **Backend** | Java 17, Spring Boot 3.3.4 (REST, Data JPA, Security, WebSockets, Validation) |
+| **Database** | PostgreSQL 14+ (production / docker) & H2 (in-memory testing) |
+| **Authentication** | Spring Security + JWT (JJWT: Access & Refresh Tokens), BCrypt |
+| **Spreadsheets** | Apache POI (Excel import, export & template generation) |
+| **Real-time** | Spring WebSocket (Live KPI updates on operation validation) |
+| **Email** | Jakarta Mail / JavaMailSender (HTML OTP verification emails) |
 
 ---
 
-## Getting Started (Docker - Recommended)
+## Object-Oriented Programming (OOP) Architecture
 
-The easiest way to run the entire stack is with Docker Compose. This will spin up the PostgreSQL database, the FastAPI backend, and the React frontend.
+The Java backend is designed following clean architecture, SOLID principles, and proven OOP design patterns:
 
-### Prerequisites
-- [Docker](https://docs.docker.com/get-docker/)
-- [Docker Compose](https://docs.docker.com/compose/install/)
+### 1. Encapsulation
+- **Domain-Driven Entities**: Entities like `Stock`, `Product`, `Operation`, and `User` encapsulate their internal state and expose high-level domain methods rather than acting as simple data containers:
+  - `Stock.deductStock(quantity)`: Validates stock availability (`freeToUse >= quantity`) and applies deduction atomically.
+  - `Stock.addStock(quantity)`: Safely increments on-hand quantities.
+  - `Product.calculateCurrentStock()`: Encapsulates multi-location inventory summation.
+  - `Operation.markDone()` / `markCanceled()`: Encapsulates state transitions and prevents illegal status changes.
+- **DTO Layer**: Strict separation between API transfer objects (`dto/`) and internal JPA persistence models (`entity/`).
 
-### Run with Docker
+### 2. Abstraction & Inheritance
+- **Base Entity Hierarchy**: `BaseEntity` mapped superclass encapsulates UUID primary key generation, `createdAt`, and `updatedAt` audit timestamps with `@PrePersist` and `@PreUpdate` lifecycle callbacks.
+- **Service Abstractions**: Core business operations are declared as interfaces (`AuthService`, `WarehouseService`, `ProductService`, `OperationService`, `StockService`, `DashboardService`, etc.) to adhere to the Dependency Inversion Principle (DIP).
+- **Template Method Pattern**: `AbstractOperationHandler` provides reusable protected helpers (`getOrCreateStock`, `recordMoveHistory`) inherited by all operation strategies.
 
-1. **Start the stack**
-   ```bash
-   docker-compose up -d --build
-   ```
+### 3. Polymorphism & Strategy Pattern
+- Operations (`IN`, `OUT`, `TRANSFER`, `ADJUSTMENT`) have distinct stock mutation and ledger behaviors:
+  - `OperationHandler` (Interface): Strategy contract defining `process(Operation)` and `calculateInitialStatus(Operation)`.
+  - `ReceiptOperationHandler` (IN): Increases destination stock, records IN ledger history, initializes status as `READY`.
+  - `DeliveryOperationHandler` (OUT): Validates stock sufficiency, deducts from source, records OUT ledger history, initializes as `WAITING` or `READY`.
+  - `TransferOperationHandler` (TRANSFER): Shifts stock from source to destination without changing total inventory.
+  - `AdjustmentOperationHandler` (ADJUSTMENT): Reconciles physical count differences and logs positive/negative deltas.
 
-2. **Access the application**
-   - **Frontend:** http://localhost:5174
-   - **Backend API Docs:** http://localhost:8000/docs
-   - **Database:** `localhost:5432` (User: `postgres`, Password: `password`, DB: `invenza`)
+### 4. Factory Pattern & Open/Closed Principle (OCP)
+- `OperationHandlerFactory`: Injects all strategy handlers via Spring DI and resolves the correct handler at runtime via `getHandler(OperationType)`. New operation types can be added without altering existing service logic.
 
-3. **Stop the stack**
-   ```bash
-   docker-compose down
-   ```
-
-*(Note: The Docker setup automatically runs database migrations on startup.)*
+### 5. Observer Pattern & Event-Driven Architecture
+- When an operation is validated, `OperationService` publishes an `OperationValidatedEvent`.
+- `OperationEventListener` captures the event asynchronously and broadcasts real-time KPI notifications to all connected clients over WebSocket (`/ws/dashboard`).
 
 ---
 
-## Getting Started (Local Development)
+## Quick Start (Docker Compose - Recommended)
 
-If you prefer to run the services locally without Docker:
+Run the full stack (PostgreSQL + Java Backend + React Frontend):
+
+```bash
+docker-compose up -d --build
+```
+
+- **Frontend Application:** http://localhost:5174
+- **Backend API:** http://localhost:8000
+- **Database:** `localhost:5432` (`postgres:password@localhost:5432/invenza`)
+
+Stop the stack:
+```bash
+docker-compose down
+```
+
+---
+
+## Quick Start (Local Development)
 
 ### Prerequisites
-- Python 3.9+
-- Node.js 18+
-- PostgreSQL 14+ running locally
+- **Java 17+** (JDK)
+- **Maven 3.8+**
+- **Node.js 18+**
+- **PostgreSQL 14+** (optional; tests and local dev can run with in-memory H2 profile)
 
 ### 1. Backend Setup
 
 ```bash
 cd backend
 
-# Create and activate virtual environment
-python3 -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
+# Build and run tests
+mvn clean test
 
-# Install dependencies
-pip install -r requirements.txt
+# Run the Spring Boot application (port 8000)
+mvn spring-boot:run
+```
 
-# Copy env file and configure
-cp .env.example .env
-# Edit .env — set DATABASE_URL to your local Postgres instance
-
-# Run migrations
-alembic upgrade head
-
-# Start API server
-uvicorn app.main:app --reload --port 8000
+*Note: If PostgreSQL is not running locally, run with the test profile for in-memory H2 database:*
+```bash
+mvn spring-boot:run -Dspring-boot.run.profiles=test
 ```
 
 ### 2. Frontend Setup
@@ -87,16 +104,19 @@ cd frontend
 # Install dependencies
 npm install
 
-# Start dev server
+# Start Vite dev server (port 5173/5174)
 npm run dev
 ```
 
 ---
 
-## Key Features
+## API Summary
 
-- **Hardened Auth**: JWT + bcrypt + In-memory rate limiting + 3-step OTP password reset.
-- **Role-based Access**: Inventory Manager (full access) vs Warehouse Staff (operational access).
-- **Real-time Dashboard**: Live KPI updates pushed via WebSockets on any stock operation.
-- **Operations & Movements**: Track Receipts (IN), Deliveries (OUT), Transfers, and Adjustments.
-- **Stock Management**: Transactional stock mutations with `SELECT FOR UPDATE` to prevent race conditions.
+- **Auth** (`/auth`): Signup with OTP, login with rate limiting & progressive lockout, token refresh, forgot password & reset, password change, current user profile.
+- **Warehouses & Locations** (`/warehouses`, `/locations`): Multi-warehouse and location management with manager RBAC.
+- **Products & Categories** (`/products`, `/categories`): Product catalog, SKU tracking, reorder thresholds, Excel template download, export, and transactional import with preview validation.
+- **Stock** (`/stock`): Real-time inventory tracking by location, on-hand, reserved, and free-to-use quantities.
+- **Operations** (`/operations`): Receipts, deliveries, internal transfers, and physical adjustments with validation lifecycle.
+- **Move History** (`/move-history`): Immutable ledger of all completed stock movements.
+- **Dashboard** (`/dashboard/kpis`): Real-time KPI summaries, late/pending operations, and low/out-of-stock counts.
+- **WebSocket** (`/ws/dashboard`): Live KPI push notifications.

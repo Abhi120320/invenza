@@ -1,14 +1,11 @@
-# ── Backend ───────────────────────────────────────────────────
-backend/venv/
-backend/__pycache__/
-backend/**/__pycache__/
-backend/**/*.pyc
+# ── Backend (Java / Maven) ────────────────────────────────────
+backend/target/
+*.class
+*.jar
+*.war
 backend/.env
-backend/*.egg-info/
-backend/dist/
-backend/build/
 
-# ── Frontend ──────────────────────────────────────────────────
+# ── Frontend (React / Vite) ──────────────────────────────────
 frontend/node_modules/
 frontend/dist/
 frontend/.env.local
@@ -18,4 +15,5 @@ frontend/.env.production
 .DS_Store
 *.log
 .idea/
-.vscode/settings.json
+.vscode/
+frontend/.vscode/

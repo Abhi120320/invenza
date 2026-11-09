@@ -136,5 +136,13 @@ export const moveHistoryApi = {
 
 // ── Dashboard ─────────────────────────────────────────────────
 export const dashboardApi = {
-  kpis: () => api.get('/dashboard/kpis'),
+  kpis: (params) => api.get('/dashboard/kpis', { params }),
 };
+
+// ── Payments (Razorpay) ───────────────────────────────────────
+export const paymentApi = {
+  createOrder: (data) => api.post('/payments/create-order', data),
+  verifyPayment: (data) => api.post('/payments/verify', data),
+  getPaymentByOperation: (operationId) => api.get(`/payments/operation/${operationId}`),
+};
+

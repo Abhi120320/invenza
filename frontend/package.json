@@ -10,10 +10,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@dotlottie/player-component": "^2.7.12",
     "axios": "^1.20.0",
     "browser-image-compression": "^2.0.2",
     "date-fns": "^4.4.0",
     "framer-motion": "^13.4.4",
+    "lottie-web": "^5.13.0",
     "lucide-react": "^1.48.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
